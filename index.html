@@ -1,0 +1,789 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>FUTURE SHOOTERS</title>
+    <style>
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        body { background: #000; overflow: hidden; font-family: 'Courier New', Courier, monospace; }
+        canvas { display: block; position: absolute; top: 0; left: 0; }
+        #hud { pointer-events: none; z-index: 1; }
+
+        #overlay {
+            position: absolute; top: 0; left: 0;
+            width: 100%; height: 100%;
+            display: flex; align-items: center; justify-content: center;
+            flex-direction: column;
+            z-index: 2;
+            background: rgba(0, 0, 8, 0.94);
+            color: #0ff;
+        }
+        #overlay h1 {
+            font-size: clamp(36px, 7vw, 72px);
+            text-shadow: 0 0 20px #0ff, 0 0 60px #0088ff;
+            letter-spacing: 10px;
+            margin-bottom: 8px;
+        }
+        #overlay .subtitle {
+            font-size: clamp(11px, 1.8vw, 16px);
+            color: #66aaff;
+            letter-spacing: 4px;
+            margin-bottom: 36px;
+        }
+        #overlay .controls {
+            display: flex; gap: 32px; margin-bottom: 44px; flex-wrap: wrap; justify-content: center;
+        }
+        .pctrl {
+            text-align: center; padding: 18px 24px;
+            border: 1px solid; min-width: 185px;
+        }
+        .p1c { color: #00bbff; border-color: #00bbff; background: rgba(0,170,255,0.06); }
+        .p2c { color: #ff6600; border-color: #ff6600; background: rgba(255,102,0,0.06); }
+        .pctrl h3 { font-size: 15px; letter-spacing: 3px; margin-bottom: 12px; }
+        .pctrl p { font-size: 12px; line-height: 2.1; color: #aaa; }
+        .pctrl .key { color: #fff; }
+        #overlay .goal {
+            font-size: 13px; color: #888; letter-spacing: 2px; margin-bottom: 36px;
+        }
+        #overlay button {
+            padding: 14px 52px; font-size: 22px;
+            font-family: 'Courier New', monospace;
+            background: transparent;
+            border: 2px solid #0ff; color: #0ff;
+            cursor: pointer; letter-spacing: 5px;
+            transition: all 0.15s;
+        }
+        #overlay button:hover {
+            background: #0ff; color: #000;
+            box-shadow: 0 0 40px #0ff;
+        }
+
+        #gameover {
+            position: absolute; top: 0; left: 0;
+            width: 100%; height: 100%;
+            display: none; align-items: center; justify-content: center;
+            flex-direction: column; z-index: 2;
+            background: rgba(0,0,0,0.88);
+        }
+        #gameover h2 {
+            font-size: clamp(40px, 8vw, 80px);
+            letter-spacing: 6px; margin-bottom: 16px;
+            text-shadow: 0 0 30px currentColor;
+        }
+        #gameover .scores {
+            font-size: 20px; color: #ccc; margin-bottom: 40px; letter-spacing: 2px;
+        }
+        #gameover button {
+            padding: 12px 38px; font-size: 18px;
+            font-family: 'Courier New', monospace;
+            background: transparent; border: 2px solid #fff; color: #fff;
+            cursor: pointer; letter-spacing: 3px;
+        }
+        #gameover button:hover { background: rgba(255,255,255,0.15); }
+    </style>
+</head>
+<body>
+
+<canvas id="game"></canvas>
+<canvas id="hud"></canvas>
+
+<div id="overlay">
+    <h1>FUTURE SHOOTERS</h1>
+    <p class="subtitle">2-PLAYER SPLIT-SCREEN ARENA FPS</p>
+    <div class="controls">
+        <div class="pctrl p1c">
+            <h3>PLAYER 1</h3>
+            <p>
+                <span class="key">W/S</span> — Move<br>
+                <span class="key">A/D</span> — Strafe<br>
+                <span class="key">Q/E</span> — Turn<br>
+                <span class="key">R/F</span> — Look Up/Down<br>
+                <span class="key">SPACE</span> — Shoot
+            </p>
+        </div>
+        <div class="pctrl p2c">
+            <h3>PLAYER 2</h3>
+            <p>
+                <span class="key">↑/↓</span> — Move<br>
+                <span class="key">←/→</span> — Strafe<br>
+                <span class="key">,  /  .</span> — Turn<br>
+                <span class="key">P / ;</span> — Look Up/Down<br>
+                <span class="key">ENTER</span> — Shoot
+            </p>
+        </div>
+    </div>
+    <p class="goal">FIRST TO 10 KILLS WINS</p>
+    <button onclick="startGame()">START GAME</button>
+</div>
+
+<div id="gameover">
+    <h2 id="winner-text"></h2>
+    <p class="scores" id="final-score"></p>
+    <button onclick="restartGame()">PLAY AGAIN</button>
+</div>
+
+<script src="https://cdn.jsdelivr.net/npm/three@0.134.0/build/three.min.js"></script>
+<script>
+// ============================================================
+//  FUTURE SHOOTERS — 2-Player Split-Screen FPS
+//  Three.js r134
+// ============================================================
+
+const ARENA_HALF   = 14;
+const EYE_HEIGHT   = 1.6;
+const MOVE_SPEED   = 5.2;
+const TURN_SPEED   = 1.9;
+const PITCH_SPEED  = 1.6;
+const MAX_PITCH    = Math.PI / 2.3;
+const PLAYER_R     = 0.38;
+const BULLET_DMG   = 25;
+const MAX_HP       = 100;
+const SHOOT_CD     = 0.28;
+const RESPAWN_TIME = 3.0;
+const KILL_LIMIT   = 10;
+
+let W = window.innerWidth;
+let H = window.innerHeight;
+
+// ── Canvases ──────────────────────────────────────────────
+const gameCanvas = document.getElementById('game');
+const hudCanvas  = document.getElementById('hud');
+const hud        = hudCanvas.getContext('2d');
+gameCanvas.width = hudCanvas.width  = W;
+gameCanvas.height= hudCanvas.height = H;
+
+// ── Renderer ──────────────────────────────────────────────
+const renderer = new THREE.WebGLRenderer({ canvas: gameCanvas, antialias: true });
+renderer.setSize(W, H);
+renderer.shadowMap.enabled = true;
+renderer.shadowMap.type    = THREE.PCFSoftShadowMap;
+renderer.autoClear         = false;
+
+// ── Scene ─────────────────────────────────────────────────
+const scene = new THREE.Scene();
+scene.background = new THREE.Color(0x08000f);
+scene.fog = new THREE.FogExp2(0x08000f, 0.038);
+
+// ── Cameras ───────────────────────────────────────────────
+const halfAspect = (W / 2) / H;
+const cam1 = new THREE.PerspectiveCamera(78, halfAspect, 0.05, 80);
+const cam2 = new THREE.PerspectiveCamera(78, halfAspect, 0.05, 80);
+// Layers: 1 = P1 body (cam1 hides it), 2 = P2 body (cam2 hides it)
+cam1.layers.enableAll(); cam1.layers.disable(1);
+cam2.layers.enableAll(); cam2.layers.disable(2);
+
+// ── Lighting ──────────────────────────────────────────────
+scene.add(new THREE.AmbientLight(0x18102a, 3));
+
+const sun = new THREE.DirectionalLight(0x8080ff, 1.2);
+sun.position.set(0, 18, 0);
+sun.castShadow = true;
+sun.shadow.mapSize.set(1024, 1024);
+Object.assign(sun.shadow.camera, { near:1, far:50, left:-18, right:18, top:18, bottom:-18 });
+scene.add(sun);
+
+// Team-coloured fill lights
+const fillP1 = new THREE.PointLight(0x0044cc, 2.5, 22, 2);
+fillP1.position.set(-11, 3, 0); scene.add(fillP1);
+const fillP2 = new THREE.PointLight(0xcc3300, 2.5, 22, 2);
+fillP2.position.set( 11, 3, 0); scene.add(fillP2);
+
+// Atmosphere flicker lights
+const atmosData = [
+    { color: 0x4400cc, pos: [-11,-12] },
+    { color: 0x00cc88, pos: [ 11, 12] },
+    { color: 0xff0066, pos: [-11, 12] },
+    { color: 0x0088ff, pos: [ 11,-12] },
+];
+const atmosLights = atmosData.map(d => {
+    const l = new THREE.PointLight(d.color, 1.4, 7);
+    l.position.set(d.pos[0], 0.4, d.pos[1]);
+    scene.add(l);
+    return l;
+});
+
+// Muzzle flash light (reused)
+const muzzleLight = new THREE.PointLight(0xffffff, 0, 6);
+scene.add(muzzleLight);
+
+// ── Arena ─────────────────────────────────────────────────
+const bulletCollidables = [];  // raycasting: walls + covers
+const moveCollidables   = [];  // movement: covers only
+
+function addBox(w, h, d, x, y, z, mat, isWall = false) {
+    const m = new THREE.Mesh(new THREE.BoxGeometry(w, h, d), mat);
+    m.position.set(x, y, z);
+    m.castShadow = m.receiveShadow = true;
+    scene.add(m);
+    bulletCollidables.push(m);
+    if (!isWall) moveCollidables.push(m);
+    return m;
+}
+
+// Materials
+const matFloor  = new THREE.MeshLambertMaterial({ color: 0x0d0d20 });
+const matCeil   = new THREE.MeshLambertMaterial({ color: 0x06060f });
+const matWall   = new THREE.MeshLambertMaterial({ color: 0x18184a, emissive: 0x05053a, emissiveIntensity: 0.6 });
+const matCover  = new THREE.MeshLambertMaterial({ color: 0x251550, emissive: 0x0a0330, emissiveIntensity: 0.5 });
+const matBarrier= new THREE.MeshLambertMaterial({ color: 0x142040, emissive: 0x050e22, emissiveIntensity: 0.5 });
+const matGlow   = new THREE.MeshBasicMaterial({ color: 0x5511cc });
+const matGlowR  = new THREE.MeshBasicMaterial({ color: 0xcc2200 });
+const matGlowC  = new THREE.MeshBasicMaterial({ color: 0x00ccaa });
+
+// Floor
+const floorMesh = new THREE.Mesh(new THREE.PlaneGeometry(ARENA_HALF*2, ARENA_HALF*2), matFloor);
+floorMesh.rotation.x = -Math.PI / 2;
+floorMesh.receiveShadow = true;
+scene.add(floorMesh);
+const grid = new THREE.GridHelper(ARENA_HALF*2, ARENA_HALF*2, 0x000844, 0x000422);
+grid.position.y = 0.01;
+scene.add(grid);
+
+// Ceiling
+const ceilMesh = new THREE.Mesh(new THREE.PlaneGeometry(ARENA_HALF*2, ARENA_HALF*2), matCeil);
+ceilMesh.rotation.x = Math.PI / 2;
+ceilMesh.position.y = 6;
+scene.add(ceilMesh);
+
+// Ceiling light strips
+[-6,-2,2,6].forEach(x => {
+    const strip = new THREE.Mesh(new THREE.BoxGeometry(0.15, 0.05, ARENA_HALF*2), new THREE.MeshBasicMaterial({ color: 0x221133 }));
+    strip.position.set(x, 5.95, 0);
+    scene.add(strip);
+});
+
+// Walls (isWall=true → only in bullet collidables, not movement)
+const WK = ARENA_HALF * 2;
+addBox(WK + 1.6, 6, 0.8,  0, 3, -ARENA_HALF - 0.4, matWall, true);
+addBox(WK + 1.6, 6, 0.8,  0, 3,  ARENA_HALF + 0.4, matWall, true);
+addBox(0.8, 6, WK,        -ARENA_HALF - 0.4, 3, 0, matWall, true);
+addBox(0.8, 6, WK,         ARENA_HALF + 0.4, 3, 0, matWall, true);
+
+// Wall trim (glow lines on walls)
+const trimMat = new THREE.MeshBasicMaterial({ color: 0x220044 });
+[-ARENA_HALF, ARENA_HALF].forEach(z => {
+    const t = new THREE.Mesh(new THREE.BoxGeometry(WK, 0.12, 0.05), trimMat);
+    t.position.set(0, 0.8, z); scene.add(t);
+    const t2 = t.clone(); t2.position.y = 4.8; scene.add(t2);
+});
+[-ARENA_HALF, ARENA_HALF].forEach(x => {
+    const t = new THREE.Mesh(new THREE.BoxGeometry(0.05, 0.12, WK), trimMat);
+    t.position.set(x, 0.8, 0); scene.add(t);
+    const t2 = t.clone(); t2.position.y = 4.8; scene.add(t2);
+});
+
+// Central pillar
+addBox(2.2, 5.5, 2.2,  0, 2.75, 0, matCover);
+// Accent rings on pillar
+[1.2, 2.8, 4.2].forEach(y => {
+    const r = new THREE.Mesh(new THREE.BoxGeometry(2.5, 0.12, 2.5), matGlow);
+    r.position.set(0, y, 0); scene.add(r);
+});
+
+// Side barriers (long walls for cover)
+addBox(4.5, 2.2, 0.85,  -6, 1.1,  0, matBarrier);
+addBox(4.5, 2.2, 0.85,   6, 1.1,  0, matBarrier);
+addBox(0.85, 2.2, 4.5,   0, 1.1, -6, matBarrier);
+addBox(0.85, 2.2, 4.5,   0, 1.1,  6, matBarrier);
+
+// Corner crates
+const cornerPositions = [[-9,1,-9],[9,1,-9],[-9,1,9],[9,1,9]];
+cornerPositions.forEach(([x,y,z]) => {
+    addBox(2.2, 2.2, 2.2, x, y, z, matCover);
+    const top = new THREE.Mesh(new THREE.BoxGeometry(2.4, 0.12, 2.4), matGlowR);
+    top.position.set(x, 2.2, z); scene.add(top);
+});
+
+// L-shape covers (diagonal cover near center)
+addBox(3.2, 2.2, 0.85,  -9.5, 1.1,  -4, matBarrier);
+addBox(0.85, 2.2, 2.2,  -8,   1.1, -3.2, matBarrier);
+addBox(3.2, 2.2, 0.85,   9.5, 1.1,   4, matBarrier);
+addBox(0.85, 2.2, 2.2,   8,   1.1,  3.2, matBarrier);
+
+// Small scatter boxes
+addBox(1.4, 1.4, 1.4,  -4, 0.7,  9, matCover);
+addBox(1.4, 1.4, 1.4,   4, 0.7, -9, matCover);
+addBox(1.4, 1.4, 1.4,  -4, 0.7, -9, matCover);
+addBox(1.4, 1.4, 1.4,   4, 0.7,  9, matCover);
+
+// Glow accent strips on barrier tops
+scene.children.filter(c => c.isMesh && c.material === matBarrier).forEach(b => {
+    const p = b.geometry.parameters;
+    const s = new THREE.Mesh(
+        new THREE.BoxGeometry(p.width + 0.05, 0.08, p.depth + 0.05),
+        matGlowC
+    );
+    s.position.set(b.position.x, b.position.y + p.height/2 + 0.04, b.position.z);
+    scene.add(s);
+});
+
+// ── Effects Pool ──────────────────────────────────────────
+const tracers = [];
+const sparks  = [];
+
+function spawnTracer(from, to, color) {
+    const geo = new THREE.BufferGeometry().setFromPoints([from.clone(), to.clone()]);
+    const mat = new THREE.LineBasicMaterial({ color, transparent: true, opacity: 0.9 });
+    const line = new THREE.Line(geo, mat);
+    scene.add(line);
+    tracers.push({ line, life: 0.11, maxLife: 0.11 });
+}
+
+function spawnSparks(pos, count, color) {
+    for (let i = 0; i < count; i++) {
+        const geo = new THREE.SphereGeometry(0.045, 4, 4);
+        const mat = new THREE.MeshBasicMaterial({ color, transparent: true });
+        const m   = new THREE.Mesh(geo, mat);
+        m.position.copy(pos);
+        scene.add(m);
+        sparks.push({
+            mesh: m, life: 0.45, maxLife: 0.45,
+            vel: new THREE.Vector3(
+                (Math.random()-0.5)*6,
+                Math.random()*5 + 0.5,
+                (Math.random()-0.5)*6
+            )
+        });
+    }
+}
+
+// ── Player Mesh Builder ───────────────────────────────────
+function buildPlayerMesh(layer, bodyColor, glowColor) {
+    const root = new THREE.Group();
+
+    function addPart(geo, color) {
+        const m = new THREE.Mesh(geo, new THREE.MeshLambertMaterial({ color }));
+        m.layers.set(layer);
+        m.castShadow = true;
+        root.add(m);
+        return m;
+    }
+
+    // Legs
+    addPart(new THREE.BoxGeometry(0.22, 0.72, 0.24), bodyColor).position.set(-0.14, 0.36, 0);
+    addPart(new THREE.BoxGeometry(0.22, 0.72, 0.24), bodyColor).position.set( 0.14, 0.36, 0);
+    // Torso
+    addPart(new THREE.BoxGeometry(0.62, 0.80, 0.36), bodyColor).position.set(0, 1.10, 0);
+    // Arms
+    addPart(new THREE.BoxGeometry(0.18, 0.68, 0.22), bodyColor).position.set(-0.48, 1.08, 0);
+    addPart(new THREE.BoxGeometry(0.18, 0.68, 0.22), bodyColor).position.set( 0.48, 1.08, 0);
+    // Head
+    addPart(new THREE.BoxGeometry(0.42, 0.42, 0.38), bodyColor).position.set(0, 1.65, 0);
+    // Visor
+    const visor = new THREE.Mesh(new THREE.BoxGeometry(0.28, 0.12, 0.04), new THREE.MeshBasicMaterial({ color: glowColor }));
+    visor.position.set(0, 1.67, -0.20);
+    visor.layers.set(layer);
+    root.add(visor);
+
+    root.layers.set(layer);
+    scene.add(root);
+    return root;
+}
+
+// ── Players ───────────────────────────────────────────────
+const SPAWN = [
+    { pos: new THREE.Vector3(-11, 0, 0), yaw: -Math.PI / 2 },
+    { pos: new THREE.Vector3( 11, 0, 0), yaw:  Math.PI / 2 },
+];
+
+function makePlayer(id) {
+    const cfg = id === 0
+        ? { color: 0x0055aa, glow: 0x00ddff, css: '#00aaff', label: 'PLAYER 1',
+            controls: { fwd:'w', bwd:'s', sl:'a', sr:'d', tl:'q', tr:'e', lu:'r', ld:'f', shoot:' ' } }
+        : { color: 0x882200, glow: 0xff8833, css: '#ff6600', label: 'PLAYER 2',
+            controls: { fwd:'arrowup', bwd:'arrowdown', sl:'arrowleft', sr:'arrowright', tl:',', tr:'.', lu:'p', ld:';', shoot:'enter' } };
+
+    return {
+        id, cam: id === 0 ? cam1 : cam2,
+        mesh:  buildPlayerMesh(id + 1, cfg.color, cfg.glow),
+        pos:   SPAWN[id].pos.clone(),
+        yaw:   SPAWN[id].yaw, pitch: 0,
+        hp: MAX_HP, kills: 0, deaths: 0,
+        alive: true, respawnTimer: 0,
+        shootCD: 0, shootFlash: 0, hitFlash: 0, hitMarker: 0,
+        cssColor: cfg.css, label: cfg.label,
+        controls: cfg.controls
+    };
+}
+
+const players = [makePlayer(0), makePlayer(1)];
+
+function syncPlayer(p) {
+    p.mesh.position.set(p.pos.x, p.pos.y, p.pos.z);
+    p.mesh.rotation.y = p.yaw;
+    p.cam.position.set(p.pos.x, p.pos.y + EYE_HEIGHT, p.pos.z);
+    p.cam.rotation.set(p.pitch, p.yaw, 0, 'YXZ');
+}
+players.forEach(syncPlayer);
+
+// ── Input ─────────────────────────────────────────────────
+const keys = {};
+window.addEventListener('keydown', e => {
+    const k = e.key.toLowerCase();
+    if ([' ','arrowup','arrowdown','arrowleft','arrowright'].includes(k)) e.preventDefault();
+    if (k === 'enter') e.preventDefault();
+    keys[k] = true;
+});
+window.addEventListener('keyup', e => { keys[e.key.toLowerCase()] = false; });
+
+// ── Collision ─────────────────────────────────────────────
+function collidesMove(pos) {
+    for (const box of moveCollidables) {
+        const p = box.geometry.parameters;
+        const hw = p.width  / 2 + PLAYER_R;
+        const hd = p.depth  / 2 + PLAYER_R;
+        if (Math.abs(pos.x - box.position.x) < hw &&
+            Math.abs(pos.z - box.position.z) < hd) return true;
+    }
+    return false;
+}
+
+// ── Shooting ──────────────────────────────────────────────
+const raycaster = new THREE.Raycaster();
+
+function shoot(shooter, target) {
+    shooter.shootCD    = SHOOT_CD;
+    shooter.shootFlash = 0.08;
+    muzzleLight.position.copy(shooter.cam.position);
+    muzzleLight.intensity = 10;
+
+    raycaster.setFromCamera(new THREE.Vector2(0, 0), shooter.cam);
+    raycaster.far = 65;
+
+    const envHits    = raycaster.intersectObjects(bulletCollidables, true);
+    const envDist    = envHits.length ? envHits[0].distance : 65;
+    let   hitPoint   = raycaster.ray.at(Math.min(envDist, 35), new THREE.Vector3());
+
+    if (target.alive) {
+        const pHits = raycaster.intersectObjects([target.mesh], true);
+        if (pHits.length && pHits[0].distance < envDist) {
+            const dist = pHits[0].distance;
+            hitPoint   = pHits[0].point.clone();
+
+            let dmg = BULLET_DMG;
+            if (dist < 4)  dmg = Math.round(dmg * 1.35);
+            if (dist > 18) dmg = Math.round(dmg * 0.72);
+
+            target.hp -= dmg;
+            target.hitFlash  = 0.18;
+            shooter.hitMarker = 0.28;
+            spawnSparks(hitPoint, 8, shooter.id === 0 ? 0x00ddff : 0xff8833);
+
+            if (target.hp <= 0) {
+                target.hp = 0;
+                killPlayer(target, shooter);
+            }
+        }
+    }
+
+    const tStart = shooter.cam.position.clone();
+    tStart.y -= 0.08;
+    spawnTracer(tStart, hitPoint, shooter.id === 0 ? 0x44eeff : 0xff8844);
+}
+
+// ── Kill / Respawn ────────────────────────────────────────
+const killFeed = [];
+
+function killPlayer(dead, killer) {
+    dead.alive        = false;
+    dead.respawnTimer = RESPAWN_TIME;
+    dead.mesh.visible = false;
+    killer.kills++;
+    killFeed.push({ text: `${killer.label} eliminated ${dead.label}`, color: killer.cssColor, life: 3.5 });
+    if (killer.kills >= KILL_LIMIT) endGame(killer);
+}
+
+function respawnPlayer(p) {
+    p.alive      = true;
+    p.hp         = MAX_HP;
+    p.deaths++;
+    p.pos.copy(SPAWN[p.id].pos);
+    p.yaw        = SPAWN[p.id].yaw;
+    p.pitch      = 0;
+    p.mesh.visible = true;
+    syncPlayer(p);
+}
+
+// ── Game State ────────────────────────────────────────────
+let gameRunning = false;
+
+function startGame() {
+    document.getElementById('overlay').style.display = 'none';
+    gameRunning = true;
+    players.forEach(p => {
+        p.hp = MAX_HP; p.kills = 0; p.deaths = 0;
+        p.alive = true; p.respawnTimer = 0;
+        p.shootCD = 0; p.shootFlash = 0; p.hitFlash = 0; p.hitMarker = 0;
+        p.pos.copy(SPAWN[p.id].pos);
+        p.yaw = SPAWN[p.id].yaw; p.pitch = 0;
+        p.mesh.visible = true;
+        syncPlayer(p);
+    });
+    killFeed.length = 0;
+}
+
+function endGame(winner) {
+    gameRunning = false;
+    const go = document.getElementById('gameover');
+    const wt = document.getElementById('winner-text');
+    const fs = document.getElementById('final-score');
+    wt.textContent = `${winner.label} WINS!`;
+    wt.style.color = winner.cssColor;
+    wt.style.textShadow = `0 0 30px ${winner.cssColor}`;
+    fs.textContent = `${players[0].label}: ${players[0].kills} kills   |   ${players[1].label}: ${players[1].kills} kills`;
+    go.style.display = 'flex';
+}
+
+function restartGame() {
+    document.getElementById('gameover').style.display = 'none';
+    startGame();
+}
+
+// ── Update ────────────────────────────────────────────────
+function updateEffects(dt) {
+    for (let i = tracers.length - 1; i >= 0; i--) {
+        const t = tracers[i];
+        t.life -= dt;
+        t.line.material.opacity = (t.life / t.maxLife) * 0.9;
+        if (t.life <= 0) { scene.remove(t.line); t.line.geometry.dispose(); tracers.splice(i, 1); }
+    }
+    for (let i = sparks.length - 1; i >= 0; i--) {
+        const s = sparks[i];
+        s.life -= dt;
+        s.mesh.position.addScaledVector(s.vel, dt);
+        s.vel.y -= 9.5 * dt;
+        s.mesh.material.opacity = s.life / s.maxLife;
+        if (s.life <= 0) { scene.remove(s.mesh); sparks.splice(i, 1); }
+    }
+    if (muzzleLight.intensity > 0) muzzleLight.intensity = Math.max(0, muzzleLight.intensity - 50 * dt);
+    for (let i = killFeed.length - 1; i >= 0; i--) {
+        killFeed[i].life -= dt;
+        if (killFeed[i].life <= 0) killFeed.splice(i, 1);
+    }
+    atmosLights.forEach((l, i) => {
+        l.intensity = 1.4 + Math.sin(performance.now() * 0.002 + i * 2.3) * 0.55;
+    });
+}
+
+function updatePlayer(p, dt, other) {
+    if (!p.alive) {
+        p.respawnTimer -= dt;
+        if (p.respawnTimer <= 0) respawnPlayer(p);
+        return;
+    }
+    const c = p.controls;
+
+    if (p.shootCD > 0)   p.shootCD   -= dt;
+    if (p.shootFlash > 0) p.shootFlash -= dt;
+    if (p.hitFlash > 0)   p.hitFlash   -= dt;
+    if (p.hitMarker > 0)  p.hitMarker  -= dt;
+
+    // Rotation
+    if (keys[c.tl]) p.yaw += TURN_SPEED * dt;
+    if (keys[c.tr]) p.yaw -= TURN_SPEED * dt;
+    if (keys[c.lu]) p.pitch = Math.min( MAX_PITCH, p.pitch + PITCH_SPEED * dt);
+    if (keys[c.ld]) p.pitch = Math.max(-MAX_PITCH, p.pitch - PITCH_SPEED * dt);
+
+    // Movement (yaw=0 → looking -Z; forward = (-sinY, 0, -cosY))
+    const fx = -Math.sin(p.yaw), fz = -Math.cos(p.yaw);
+    const rx =  Math.cos(p.yaw), rz = -Math.sin(p.yaw);
+    let mx = 0, mz = 0;
+    if (keys[c.fwd]) { mx += fx; mz += fz; }
+    if (keys[c.bwd]) { mx -= fx; mz -= fz; }
+    if (keys[c.sl])  { mx -= rx; mz -= rz; }
+    if (keys[c.sr])  { mx += rx; mz += rz; }
+
+    const len = Math.sqrt(mx*mx + mz*mz);
+    if (len > 0.001) {
+        mx = (mx/len) * MOVE_SPEED * dt;
+        mz = (mz/len) * MOVE_SPEED * dt;
+    }
+
+    // Slide collision (try X then Z separately)
+    const tryX = p.pos.clone(); tryX.x += mx;
+    tryX.x = Math.max(-ARENA_HALF + PLAYER_R, Math.min(ARENA_HALF - PLAYER_R, tryX.x));
+    if (!collidesMove(tryX)) p.pos.x = tryX.x;
+
+    const tryZ = p.pos.clone(); tryZ.z += mz;
+    tryZ.z = Math.max(-ARENA_HALF + PLAYER_R, Math.min(ARENA_HALF - PLAYER_R, tryZ.z));
+    if (!collidesMove(tryZ)) p.pos.z = tryZ.z;
+
+    // Shoot
+    if (keys[c.shoot] && p.shootCD <= 0) shoot(p, other);
+
+    syncPlayer(p);
+}
+
+// ── HUD ───────────────────────────────────────────────────
+function hexToRgb(hex) {
+    const c = parseInt(hex.replace('#',''), 16);
+    return `${(c>>16)&255},${(c>>8)&255},${c&255}`;
+}
+
+function drawHUD() {
+    hud.clearRect(0, 0, W, H);
+    const half = W / 2;
+
+    players.forEach((p, i) => {
+        const ox = i * half;  // x offset for this player's side
+
+        // Screen flashes
+        if (p.hitFlash > 0) {
+            hud.fillStyle = `rgba(255,0,0,${Math.min(0.55, p.hitFlash * 3)})`;
+            hud.fillRect(ox, 0, half, H);
+        }
+        if (p.shootFlash > 0) {
+            hud.fillStyle = `rgba(255,240,180,${Math.min(0.18, p.shootFlash * 2.5)})`;
+            hud.fillRect(ox, 0, half, H);
+        }
+
+        if (!p.alive) {
+            // Death overlay
+            hud.fillStyle = 'rgba(0,0,0,0.55)';
+            hud.fillRect(ox, 0, half, H);
+            hud.fillStyle = '#ff3322';
+            hud.font = `bold ${Math.round(H*0.038)}px Courier New`;
+            hud.textAlign = 'center';
+            hud.fillText('ELIMINATED', ox + half/2, H/2 - H*0.04);
+            hud.fillStyle = '#fff';
+            hud.font = `bold ${Math.round(H*0.065)}px Courier New`;
+            hud.fillText(Math.ceil(p.respawnTimer), ox + half/2, H/2 + H*0.04);
+            hud.fillStyle = '#888';
+            hud.font = `${Math.round(H*0.022)}px Courier New`;
+            hud.fillText('RESPAWNING', ox + half/2, H/2 + H*0.09);
+            return;
+        }
+
+        // Crosshair
+        const cx = ox + half / 2, cy = H / 2;
+        const hit = p.hitMarker > 0;
+        hud.strokeStyle = hit ? '#ff4444' : 'rgba(255,255,255,0.88)';
+        hud.lineWidth   = hit ? 2.5 : 1.8;
+        const arm = hit ? 13 : 9, gap = 4;
+        hud.beginPath();
+        hud.moveTo(cx - arm - gap, cy); hud.lineTo(cx - gap, cy);
+        hud.moveTo(cx + gap, cy);       hud.lineTo(cx + arm + gap, cy);
+        hud.moveTo(cx, cy - arm - gap); hud.lineTo(cx, cy - gap);
+        hud.moveTo(cx, cy + gap);       hud.lineTo(cx, cy + arm + gap);
+        hud.stroke();
+        hud.fillStyle = hit ? '#ff4444' : 'rgba(255,255,255,0.88)';
+        hud.beginPath(); hud.arc(cx, cy, 1.8, 0, Math.PI*2); hud.fill();
+
+        const fs = Math.max(10, Math.round(H * 0.018));
+        const barW = Math.round(half * 0.33);
+        const barH = Math.round(H * 0.016);
+        const barX = ox + 18;
+        const barY = H - Math.round(H * 0.072);
+
+        // Health bar bg
+        hud.fillStyle = 'rgba(0,0,0,0.55)';
+        hud.fillRect(barX - 2, barY - Math.round(H*0.038), barW + 4, Math.round(H*0.06));
+
+        // Health bar fill
+        const ratio = p.hp / MAX_HP;
+        const hpColor = ratio > 0.5 ? '#00ee88' : ratio > 0.25 ? '#ffaa00' : '#ff2200';
+        hud.fillStyle = hpColor;
+        hud.fillRect(barX, barY, Math.round(barW * ratio), barH);
+        hud.strokeStyle = 'rgba(255,255,255,0.28)';
+        hud.lineWidth = 1;
+        hud.strokeRect(barX, barY, barW, barH);
+
+        // HP text
+        hud.fillStyle = '#fff';
+        hud.font = `bold ${fs}px Courier New`;
+        hud.textAlign = 'left';
+        hud.fillText(`HP  ${p.hp}`, barX, barY - 5);
+
+        // Player label
+        hud.fillStyle = p.cssColor;
+        hud.font = `bold ${Math.round(fs * 1.15)}px Courier New`;
+        hud.fillText(p.label, barX, barY - fs - 8);
+
+        // Kill counter (bottom right of each half)
+        hud.fillStyle = '#ffdd00';
+        hud.font = `bold ${Math.round(H*0.032)}px Courier New`;
+        hud.textAlign = 'right';
+        hud.fillText(`${p.kills}`, ox + half - 18, H - Math.round(H*0.05));
+        hud.fillStyle = '#888';
+        hud.font = `${fs}px Courier New`;
+        hud.fillText(`/ ${KILL_LIMIT} kills`, ox + half - 18, H - Math.round(H*0.028));
+    });
+
+    // Center divider line
+    hud.strokeStyle = 'rgba(255,255,255,0.12)';
+    hud.lineWidth = 2;
+    hud.beginPath(); hud.moveTo(W/2, 0); hud.lineTo(W/2, H); hud.stroke();
+
+    // Kill feed (center top)
+    const feedFs = Math.max(11, Math.round(H * 0.016));
+    hud.font = `${feedFs}px Courier New`;
+    hud.textAlign = 'center';
+    killFeed.slice(-5).forEach((k, i) => {
+        const alpha = Math.min(1, k.life / 0.7);
+        hud.fillStyle = `rgba(${hexToRgb(k.color)},${alpha.toFixed(2)})`;
+        hud.fillText(k.text, W/2, 28 + i * (feedFs + 6));
+    });
+
+    // Score bar center bottom
+    hud.fillStyle = 'rgba(0,0,0,0.5)';
+    hud.fillRect(W/2 - 70, H - 38, 140, 28);
+    hud.fillStyle = players[0].cssColor;
+    hud.font = `bold ${Math.round(H*0.022)}px Courier New`;
+    hud.textAlign = 'center';
+    hud.fillText(`${players[0].kills}`, W/2 - 22, H - 18);
+    hud.fillStyle = '#888';
+    hud.fillText('vs', W/2, H - 18);
+    hud.fillStyle = players[1].cssColor;
+    hud.fillText(`${players[1].kills}`, W/2 + 22, H - 18);
+}
+
+// ── Render Loop ───────────────────────────────────────────
+let lastTime = 0;
+
+function loop(time) {
+    requestAnimationFrame(loop);
+
+    const dt = Math.min((time - lastTime) / 1000, 0.05);
+    lastTime  = time;
+
+    if (gameRunning) {
+        updateEffects(dt);
+        updatePlayer(players[0], dt, players[1]);
+        updatePlayer(players[1], dt, players[0]);
+    }
+
+    // Split-screen 3D render
+    renderer.clear();
+    const half = Math.floor(W / 2);
+
+    renderer.setScissorTest(true);
+    renderer.setViewport(0, 0, half, H);
+    renderer.setScissor(0, 0, half, H);
+    renderer.render(scene, cam1);
+
+    renderer.setViewport(half, 0, W - half, H);
+    renderer.setScissor(half, 0, W - half, H);
+    renderer.render(scene, cam2);
+    renderer.setScissorTest(false);
+
+    // 2D HUD overlay
+    drawHUD();
+}
+
+// ── Resize ────────────────────────────────────────────────
+window.addEventListener('resize', () => {
+    W = window.innerWidth; H = window.innerHeight;
+    hudCanvas.width  = W; hudCanvas.height  = H;
+    renderer.setSize(W, H);
+    const a = (W / 2) / H;
+    cam1.aspect = cam2.aspect = a;
+    cam1.updateProjectionMatrix();
+    cam2.updateProjectionMatrix();
+});
+
+// Start loop
+requestAnimationFrame(loop);
+</script>
+</body>
+</html>
