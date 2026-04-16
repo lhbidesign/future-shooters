@@ -2,11 +2,11 @@
 <html lang="en">
 <head>
     <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
     <title>FUTURE SHOOTERS</title>
     <style>
-        * { margin:0; padding:0; box-sizing:border-box; }
-        body { background:#000; overflow:hidden; font-family:'Courier New',Courier,monospace; }
+        * { margin:0; padding:0; box-sizing:border-box; user-select:none; -webkit-user-select:none; }
+        body { background:#000; overflow:hidden; touch-action:none; font-family:'Courier New',Courier,monospace; }
         canvas { display:block; position:absolute; top:0; left:0; }
         #hud { pointer-events:none; z-index:1; }
 
@@ -617,6 +617,8 @@ function update(dt) {
     for (let i=killFeed.length-1; i>=0; i--) { killFeed[i].life-=dt; if(killFeed[i].life<=0) killFeed.splice(i,1); }
     atmosLights.forEach((l,i) => { l.intensity = 1.4 + Math.sin(performance.now()*0.002 + i*2.3)*0.55; });
 
+    applyTouchKeys();
+
     if (!myAlive || gameState !== 'playing') return;
 
     // Timers
@@ -763,11 +765,13 @@ function drawHUD() {
     hud.fillStyle='#556'; hud.fillText('vs', W/2, 24);
     hud.fillStyle=oppCfg.cssColor; hud.fillText(`${oppKills}`, W/2+20, 24);
 
-    // Controls reminder (bottom-left, faint)
-    if (gameState === 'waiting') {
+    // Controls reminder (bottom-left, faint, keyboard only)
+    if (gameState === 'waiting' && !isTouchDevice) {
         hud.fillStyle='rgba(255,255,255,0.15)'; hud.font=`${Math.round(H*0.014)}px Courier New`; hud.textAlign='left';
         hud.fillText('W/S move  A/D strafe  Q/E turn  R/F look  SPACE shoot', 20, H-8);
     }
+
+    drawJoysticks();
 }
 
 // ── Background Music ──────────────────────────────────────
@@ -788,6 +792,133 @@ function tryStartMusic() {
 window.addEventListener('keydown',   tryStartMusic, { once: true });
 window.addEventListener('pointerdown', tryStartMusic, { once: true });
 
+// ── Touch Controls (iPad / mobile) ───────────────────────
+const isTouchDevice = ('ontouchstart' in window) || (navigator.maxTouchPoints > 0);
+
+const STICK_R = 65;   // visual + hitzone radius
+const FIRE_R  = 46;   // fire button radius
+
+function stickCenter(side) {
+    return side === 'left'
+        ? { x: 140,     y: H - 180 }
+        : { x: W - 140, y: H - 180 };
+}
+function fireCenter() { return { x: W - 75, y: H - 340 }; }
+
+const touch = {
+    left:  { id:null, bx:0, by:0, nx:0, ny:0 },
+    right: { id:null, bx:0, by:0, nx:0, ny:0 },
+    fire:  { id:null },
+};
+
+function inZone(tx, ty, cx, cy, r) { return Math.hypot(tx-cx, ty-cy) < r; }
+
+function onTouchStart(e) {
+    e.preventDefault();
+    tryStartMusic();
+    for (const t of e.changedTouches) {
+        const { clientX:tx, clientY:ty, identifier:id } = t;
+        const lc = stickCenter('left'), rc = stickCenter('right'), fc = fireCenter();
+        if (!touch.left.id  && inZone(tx,ty,lc.x,lc.y,STICK_R*1.6)) {
+            touch.left  = { id, bx:tx, by:ty, nx:0, ny:0 };
+        } else if (!touch.fire.id  && inZone(tx,ty,fc.x,fc.y,FIRE_R*1.4)) {
+            touch.fire.id = id;
+        } else if (!touch.right.id && inZone(tx,ty,rc.x,rc.y,STICK_R*1.6)) {
+            touch.right = { id, bx:tx, by:ty, nx:0, ny:0 };
+        }
+    }
+}
+
+function onTouchMove(e) {
+    e.preventDefault();
+    for (const t of e.changedTouches) {
+        const { clientX:tx, clientY:ty, identifier:id } = t;
+        ['left','right'].forEach(side => {
+            const s = touch[side];
+            if (s.id !== id) return;
+            const dx=tx-s.bx, dy=ty-s.by, dist=Math.hypot(dx,dy)||1;
+            const c = Math.min(dist, STICK_R);
+            s.nx = (dx/dist)*(c/STICK_R);
+            s.ny = (dy/dist)*(c/STICK_R);
+        });
+    }
+}
+
+function onTouchEnd(e) {
+    e.preventDefault();
+    for (const t of e.changedTouches) {
+        const id = t.identifier;
+        if (touch.left.id  === id) { touch.left  = { id:null,bx:0,by:0,nx:0,ny:0 }; }
+        if (touch.right.id === id) { touch.right = { id:null,bx:0,by:0,nx:0,ny:0 }; }
+        if (touch.fire.id  === id) { touch.fire.id = null; }
+    }
+}
+
+if (isTouchDevice) {
+    document.body.addEventListener('touchstart',  onTouchStart, { passive:false });
+    document.body.addEventListener('touchmove',   onTouchMove,  { passive:false });
+    document.body.addEventListener('touchend',    onTouchEnd,   { passive:false });
+    document.body.addEventListener('touchcancel', onTouchEnd,   { passive:false });
+}
+
+function applyTouchKeys() {
+    if (!isTouchDevice) return;
+    const dead = 0.18;
+    const l = touch.left, r = touch.right;
+    keys['w'] = l.id !== null && l.ny < -dead;
+    keys['s'] = l.id !== null && l.ny >  dead;
+    keys['a'] = l.id !== null && l.nx < -dead;
+    keys['d'] = l.id !== null && l.nx >  dead;
+    keys['q'] = r.id !== null && r.nx < -dead;
+    keys['e'] = r.id !== null && r.nx >  dead;
+    keys['r'] = r.id !== null && r.ny < -dead;
+    keys['f'] = r.id !== null && r.ny >  dead;
+    keys[' '] = touch.fire.id !== null;
+}
+
+function drawJoysticks() {
+    if (!isTouchDevice || (gameState !== 'playing' && gameState !== 'waiting')) return;
+
+    function drawStick(cx, cy, nx, ny, active) {
+        // Outer ring
+        hud.beginPath(); hud.arc(cx,cy,STICK_R,0,Math.PI*2);
+        hud.fillStyle='rgba(255,255,255,0.04)'; hud.fill();
+        hud.strokeStyle=active?'rgba(255,255,255,0.4)':'rgba(255,255,255,0.18)';
+        hud.lineWidth=2; hud.stroke();
+        // Cross guides
+        hud.strokeStyle='rgba(255,255,255,0.1)'; hud.lineWidth=1;
+        hud.beginPath(); hud.moveTo(cx-STICK_R,cy); hud.lineTo(cx+STICK_R,cy);
+        hud.moveTo(cx,cy-STICK_R); hud.lineTo(cx,cy+STICK_R); hud.stroke();
+        // Thumb
+        const tx=cx+nx*STICK_R, ty=cy+ny*STICK_R;
+        hud.beginPath(); hud.arc(tx,ty,24,0,Math.PI*2);
+        hud.fillStyle=active?'rgba(255,255,255,0.55)':'rgba(255,255,255,0.22)'; hud.fill();
+    }
+
+    const lc=stickCenter('left'), rc=stickCenter('right'), fc=fireCenter();
+    const lActive = touch.left.id  !== null;
+    const rActive = touch.right.id !== null;
+    const fActive = touch.fire.id  !== null;
+
+    drawStick(lc.x,lc.y,touch.left.nx, touch.left.ny, lActive);
+    drawStick(rc.x,rc.y,touch.right.nx,touch.right.ny,rActive);
+
+    // Fire button
+    hud.beginPath(); hud.arc(fc.x,fc.y,FIRE_R,0,Math.PI*2);
+    hud.fillStyle=fActive?'rgba(255,90,0,0.75)':'rgba(255,60,0,0.28)'; hud.fill();
+    hud.strokeStyle=fActive?'rgba(255,160,0,0.9)':'rgba(255,90,0,0.5)';
+    hud.lineWidth=2.5; hud.stroke();
+    hud.fillStyle=fActive?'#fff':'rgba(255,200,150,0.85)';
+    hud.font=`bold 15px Courier New`; hud.textAlign='center';
+    hud.fillText('FIRE',fc.x,fc.y+5);
+
+    // Labels
+    hud.fillStyle='rgba(255,255,255,0.18)';
+    hud.font=`11px Courier New`; hud.textAlign='center';
+    hud.fillText('MOVE',lc.x,lc.y+STICK_R+16);
+    hud.fillText('LOOK',rc.x,rc.y+STICK_R+16);
+}
+
 // ── Render Loop ───────────────────────────────────────────
 function loop(time) {
     requestAnimationFrame(loop);
@@ -806,6 +937,7 @@ window.addEventListener('resize', () => {
     hudCanvas.width = W; hudCanvas.height = H;
     renderer.setSize(W, H);
     cam.aspect = W / H; cam.updateProjectionMatrix();
+    // Touch zones recompute from W/H on next drawJoysticks() call — no extra work needed
 });
 </script>
 </body>
