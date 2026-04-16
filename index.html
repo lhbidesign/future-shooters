@@ -37,9 +37,17 @@
         #scr-wait .invite-url {
             font-size:clamp(11px,1.6vw,15px); color:#88aaff; letter-spacing:1px;
             padding:10px 20px; border:1px solid #223366;
-            background:rgba(0,30,80,0.4); margin-bottom:36px;
+            background:rgba(0,30,80,0.4); margin-bottom:14px;
             max-width:90vw; word-break:break-all; text-align:center;
         }
+        #copy-btn {
+            padding:10px 32px; font-size:14px; letter-spacing:3px;
+            font-family:'Courier New',monospace;
+            background:transparent; border:1px solid #0cf; color:#0cf;
+            cursor:pointer; margin-bottom:30px; transition:all 0.15s;
+        }
+        #copy-btn:hover  { background:#0cf; color:#000; }
+        #copy-btn.copied { border-color:#0f8; color:#0f8; }
         #scr-wait .hint { font-size:12px; color:#445; letter-spacing:1px; }
         .pulse { animation:pulse 1.6s ease-in-out infinite; }
         @keyframes pulse { 0%,100%{opacity:1} 50%{opacity:0.35} }
@@ -70,6 +78,7 @@
     <div id="wait-badge" class="badge">YOU ARE PLAYER 1</div>
     <p class="invite-label">SHARE THIS LINK WITH YOUR OPPONENT</p>
     <div id="invite-url" class="invite-url"></div>
+    <button id="copy-btn" onclick="copyInvite()">COPY LINK</button>
     <p class="hint">You can look around while you wait</p>
 </div>
 
@@ -325,6 +334,26 @@ let   oppAlive       = true;
 let gameState = 'connecting'; // connecting | waiting | playing | gameover
 
 const killFeed = [];
+
+function copyInvite() {
+    const url = document.getElementById('invite-url').textContent;
+    const btn = document.getElementById('copy-btn');
+    navigator.clipboard.writeText(url).then(() => {
+        btn.textContent = 'COPIED!';
+        btn.classList.add('copied');
+        setTimeout(() => { btn.textContent = 'COPY LINK'; btn.classList.remove('copied'); }, 2000);
+    }).catch(() => {
+        // Fallback for older browsers / non-https
+        const ta = document.createElement('textarea');
+        ta.value = url; ta.style.position = 'fixed'; ta.style.opacity = '0';
+        document.body.appendChild(ta); ta.select();
+        document.execCommand('copy');
+        document.body.removeChild(ta);
+        btn.textContent = 'COPIED!';
+        btn.classList.add('copied');
+        setTimeout(() => { btn.textContent = 'COPY LINK'; btn.classList.remove('copied'); }, 2000);
+    });
+}
 
 function showScreen(id) {
     document.querySelectorAll('.screen').forEach(s => s.classList.remove('active'));
