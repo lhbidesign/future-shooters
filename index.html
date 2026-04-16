@@ -86,6 +86,7 @@
 </div>
 
 <script src="https://cdn.jsdelivr.net/npm/three@0.134.0/build/three.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/peerjs@1.5.2/dist/peerjs.min.js"></script>
 <script>
 // ============================================================
 //  FUTURE SHOOTERS — Online 2-Player FPS
@@ -103,6 +104,7 @@ const PITCH_SPEED = 1.6;
 const MAX_PITCH   = Math.PI / 2.3;
 const PLAYER_R    = 0.38;
 const MAX_HP      = 100;
+const BULLET_DMG  = 25;
 const KILL_LIMIT  = 10;
 const NET_HZ      = 20;     // state send rate
 const LERP        = 0.22;   // opponent interpolation
@@ -365,7 +367,6 @@ function initAsPlayer(id, serverHp, serverKills) {
 
     syncMyPlayer();
     myMesh.visible = true;
-    showScreen('scr-wait');
     gameState = 'waiting';
 }
 
@@ -387,140 +388,169 @@ function collidesMove(pos) {
     return false;
 }
 
-// ── WebSocket ─────────────────────────────────────────────
-const wsProto = location.protocol === 'https:' ? 'wss:' : 'ws:';
-const ws = new WebSocket(`${wsProto}//${location.host}`);
+// ── PeerJS Networking (no server required) ────────────────
+const joinPeerId = new URLSearchParams(location.search).get('p');
+const isHost     = !joinPeerId;
+let   dataConn   = null;
 
-ws.onopen = () => { /* assigned message incoming */ };
+if (!isHost) document.querySelector('#scr-connect h2').textContent = 'JOINING GAME...';
 
-ws.onmessage = e => {
-    const msg = JSON.parse(e.data);
+function sendMsg(data) {
+    if (dataConn && dataConn.open) dataConn.send(data);
+}
+
+function handleMsg(msg) {
     switch (msg.type) {
 
-        case 'assigned':
-            initAsPlayer(msg.playerId, msg.hp, msg.kills);
-            break;
-
-        case 'opponent_joined':
-            if (gameState === 'waiting') startPlaying();
-            break;
-
-        case 'opponent_state':
+        case 'state':
             oppNetPos.set(msg.pos.x, msg.pos.y, msg.pos.z);
             oppNetYaw   = msg.yaw;
             oppNetPitch = msg.pitch;
             break;
 
-        case 'opponent_shoot': {
-            // Visual effect for opponent's shot (seen from my side)
-            const from = oppRenderPos.clone();
-            from.y += EYE_HEIGHT;
-            const to = new THREE.Vector3(msg.hitPos.x, msg.hitPos.y, msg.hitPos.z);
-            spawnTracer(from, to, myId === 0 ? 0xff8844 : 0x44eeff);
+        case 'shoot_effect': {
+            const from = oppRenderPos.clone(); from.y += EYE_HEIGHT;
+            spawnTracer(from,
+                new THREE.Vector3(msg.hitPos.x, msg.hitPos.y, msg.hitPos.z),
+                myId === 0 ? 0xff8844 : 0x44eeff);
             break;
         }
 
-        case 'hit':
-            // Server confirmed a hit – apply HP
-            if (msg.victimId === myId) {
-                myHp       = msg.hp;
-                myHitFlash = 0.2;
-            } else {
-                oppHp = msg.hp;
+        case 'shoot_hit':
+            if (!myAlive) break;
+            myHp = Math.max(0, myHp - BULLET_DMG);
+            myHitFlash = 0.2;
+            if (myHp === 0) {
+                myAlive = false; myMesh.visible = false;
+                oppKills++;
+                killFeed.push({ text:`${PLAYER_CFG[myId^1].label} eliminated YOU`,
+                    color:PLAYER_CFG[myId^1].cssColor, life:3.5 });
+                sendMsg({ type:'died' });
+                setTimeout(() => {
+                    if (gameState !== 'gameover') {
+                        myHp = MAX_HP; myAlive = true;
+                        const sp = PLAYER_CFG[myId].spawn;
+                        myPos.set(...sp.pos); myYaw = sp.yaw; myPitch = 0;
+                        syncMyPlayer(); myMesh.visible = true;
+                        sendMsg({ type:'respawned' });
+                    }
+                }, 3000);
             }
             break;
 
-        case 'killed':
-            if (msg.victimId === myId) {
-                myAlive = false; myHp = 0; myHitFlash = 0.3;
-                myMesh.visible = false;
-                killFeed.push({ text: `${PLAYER_CFG[msg.killerId].label} eliminated YOU`, color: PLAYER_CFG[msg.killerId].cssColor, life: 3.5 });
-            } else {
-                oppAlive = false; oppHp = 0;
-                oppMesh.visible = false;
-                killFeed.push({ text: `YOU eliminated ${PLAYER_CFG[msg.victimId].label}`, color: PLAYER_CFG[myId].cssColor, life: 3.5 });
+        case 'died':
+            myKills++; oppHp = 0; oppAlive = false;
+            if (oppMesh) oppMesh.visible = false;
+            killFeed.push({ text:`YOU eliminated ${PLAYER_CFG[myId^1].label}`,
+                color:PLAYER_CFG[myId].cssColor, life:3.5 });
+            if (myKills >= KILL_LIMIT) {
+                showGameOver(myId);
+                sendMsg({ type:'game_over', winnerId:myId });
             }
-            myKills  = msg.kills[myId];
-            oppKills = msg.kills[myId ^ 1];
             break;
 
         case 'respawned':
-            if (msg.playerId === myId) {
-                myAlive = true; myHp = MAX_HP;
-                const sp = PLAYER_CFG[myId].spawn;
-                myPos.set(...sp.pos); myYaw = sp.yaw; myPitch = 0;
-                syncMyPlayer();
-                myMesh.visible = true;
-            } else {
-                oppAlive = true; oppHp = MAX_HP;
-                const osp = PLAYER_CFG[myId ^ 1].spawn;
-                oppNetPos.set(...osp.pos); oppNetYaw = osp.yaw; oppNetPitch = 0;
-                oppMesh.visible = true;
-            }
+            oppAlive = true; oppHp = MAX_HP;
+            { const osp = PLAYER_CFG[myId^1].spawn;
+              oppNetPos.set(...osp.pos); oppNetYaw = osp.yaw; oppNetPitch = 0; }
+            if (oppMesh) oppMesh.visible = true;
             break;
 
-        case 'game_over': {
-            gameState = 'gameover';
-            myKills  = msg.kills[myId];
-            oppKills = msg.kills[myId ^ 1];
-            const won = msg.winnerId === myId;
-            const myCfg  = PLAYER_CFG[myId];
-            const oppCfg = PLAYER_CFG[myId ^ 1];
-            const goTitle = document.getElementById('go-title');
-            goTitle.textContent = won ? 'YOU WIN!' : 'YOU LOSE';
-            goTitle.style.color = won ? myCfg.cssColor : oppCfg.cssColor;
-            document.getElementById('go-scores').textContent =
-                `${myCfg.label}: ${myKills} kills   |   ${oppCfg.label}: ${oppKills} kills`;
-            document.getElementById('go-restart-hint').textContent = 'Press R to play again';
-            document.getElementById('go-wait-restart').style.display = 'none';
-            showScreen('scr-gameover');
+        case 'game_over':
+            showGameOver(msg.winnerId);
             break;
-        }
 
         case 'restart':
-            myHp = MAX_HP; myKills = 0; myAlive = true;
-            myShootCD = 0; myHitFlash = 0; myShootFlash = 0; myHitMarker = 0;
-            oppHp = MAX_HP; oppKills = 0; oppAlive = true;
-            { const sp  = PLAYER_CFG[myId].spawn;
-              const osp = PLAYER_CFG[myId^1].spawn;
-              myPos.set(...sp.pos); myYaw = sp.yaw; myPitch = 0;
-              oppNetPos.set(...osp.pos); oppRenderPos.copy(oppNetPos);
-              oppNetYaw = osp.yaw; oppRenderYaw = osp.yaw; }
-            myMesh.visible = oppMesh.visible = true;
-            syncMyPlayer();
-            gameState = 'playing';
-            killFeed.length = 0;
-            showScreen(null);
-            break;
-
-        case 'opponent_left':
-            showScreen('scr-wait');
-            gameState = 'waiting';
-            oppMesh.visible = false;
-            document.getElementById('wait-badge').textContent =
-                `YOU ARE ${PLAYER_CFG[myId].label} — Waiting for opponent to reconnect`;
-            break;
-
-        case 'full':
-            showScreen('scr-full');
+            doRestart();
             break;
     }
-};
+}
 
-ws.onclose = () => {
-    if (gameState !== 'gameover') showScreen('scr-connect');
-};
-ws.onerror = () => showScreen('scr-connect');
+function showGameOver(winnerId) {
+    if (gameState === 'gameover') return;
+    gameState = 'gameover';
+    const won    = winnerId === myId;
+    const myCfg  = PLAYER_CFG[myId];
+    const oppCfg = PLAYER_CFG[myId^1];
+    const title  = document.getElementById('go-title');
+    title.textContent = won ? 'YOU WIN!' : 'YOU LOSE';
+    title.style.color = won ? myCfg.cssColor : oppCfg.cssColor;
+    document.getElementById('go-scores').textContent =
+        `${myCfg.label}: ${myKills}   |   ${oppCfg.label}: ${oppKills}`;
+    document.getElementById('go-restart-hint').textContent = 'Press R to play again';
+    showScreen('scr-gameover');
+}
 
-// State send loop
+function doRestart() {
+    myHp = MAX_HP; myKills = 0; myAlive = true;
+    myShootCD = 0; myHitFlash = 0; myShootFlash = 0; myHitMarker = 0;
+    oppHp = MAX_HP; oppKills = 0; oppAlive = true;
+    const sp  = PLAYER_CFG[myId].spawn;
+    const osp = PLAYER_CFG[myId^1].spawn;
+    myPos.set(...sp.pos); myYaw = sp.yaw; myPitch = 0;
+    oppNetPos.set(...osp.pos); oppRenderPos.copy(oppNetPos);
+    oppNetYaw = osp.yaw; oppRenderYaw = osp.yaw; oppNetPitch = 0;
+    myMesh.visible = oppMesh.visible = true;
+    syncMyPlayer();
+    gameState = 'playing'; killFeed.length = 0;
+    showScreen(null);
+}
+
+function setupConn(conn) {
+    dataConn = conn;
+    conn.on('open', () => { startPlaying(); });
+    conn.on('data', msg => { handleMsg(typeof msg === 'string' ? JSON.parse(msg) : msg); });
+    conn.on('close', () => {
+        if (gameState === 'playing') {
+            if (oppMesh) oppMesh.visible = false;
+            gameState = 'waiting';
+            if (isHost) {
+                // Regenerate a fresh invite link
+                const joinUrl = `${location.href.split('?')[0]}?p=${peer.id}`;
+                document.getElementById('invite-url').textContent = joinUrl;
+                showScreen('scr-wait');
+            } else {
+                location.replace(location.pathname); // drop ?p= and reload
+            }
+        }
+    });
+    conn.on('error', err => console.warn('conn error', err));
+}
+
+const peer = new Peer(undefined, { debug: 0 });
+
+peer.on('open', peerId => {
+    if (isHost) {
+        initAsPlayer(0, [MAX_HP,MAX_HP], [0,0]);
+        const joinUrl = `${location.href.split('?')[0]}?p=${peerId}`;
+        document.getElementById('invite-url').textContent = joinUrl;
+        showScreen('scr-wait');
+    } else {
+        initAsPlayer(1, [MAX_HP,MAX_HP], [0,0]);
+        const conn = peer.connect(joinPeerId, { reliable:true, serialization:'json' });
+        setupConn(conn);
+    }
+});
+
+peer.on('connection', conn => { setupConn(conn); }); // P1 receives P2
+
+peer.on('error', err => {
+    const h2 = document.querySelector('#scr-connect h2');
+    if (err.type === 'peer-unavailable') {
+        h2.textContent = 'HOST NOT FOUND';
+        h2.style.color = '#f44';
+        document.querySelector('#scr-connect .spinner').style.display = 'none';
+    } else {
+        h2.textContent = 'CONNECTION ERROR';
+        h2.style.color = '#f44';
+    }
+    showScreen('scr-connect');
+});
+
+// State send loop (20 Hz)
 setInterval(() => {
-    if (ws.readyState === WebSocket.OPEN && myId >= 0 && gameState === 'playing') {
-        ws.send(JSON.stringify({
-            type:'state',
-            pos:  { x:myPos.x, y:myPos.y, z:myPos.z },
-            yaw:  myYaw,
-            pitch:myPitch
-        }));
+    if (dataConn && dataConn.open && myId >= 0 && gameState === 'playing') {
+        sendMsg({ type:'state', pos:{x:myPos.x,y:myPos.y,z:myPos.z}, yaw:myYaw, pitch:myPitch });
     }
 }, 1000 / NET_HZ);
 
@@ -532,9 +562,8 @@ window.addEventListener('keydown', e => {
     keys[k] = true;
 
     if (k === 'r' && gameState === 'gameover') {
-        ws.send(JSON.stringify({ type:'restart' }));
-        document.getElementById('go-restart-hint').textContent = '';
-        document.getElementById('go-wait-restart').style.display = 'block';
+        sendMsg({ type:'restart' });
+        doRestart();
     }
 });
 window.addEventListener('keyup', e => { keys[e.key.toLowerCase()] = false; });
@@ -562,17 +591,11 @@ function shoot() {
             hitPoint = pHits[0].point.clone();
             didHit   = true;
             spawnSparks(hitPoint, 8, PLAYER_CFG[myId].glowColor);
-            ws.send(JSON.stringify({ type:'shoot_hit' }));
+            sendMsg({ type:'shoot_hit' });
         }
     }
 
-    if (!didHit) ws.send(JSON.stringify({ type:'shoot_hit_miss' })); // no-op on server
-
-    ws.send(JSON.stringify({
-        type:'shoot_effect',
-        hit: didHit,
-        hitPos:{ x:hitPoint.x, y:hitPoint.y, z:hitPoint.z }
-    }));
+    sendMsg({ type:'shoot_effect', hit:didHit, hitPos:{x:hitPoint.x,y:hitPoint.y,z:hitPoint.z} });
 
     const ts = cam.position.clone(); ts.y -= 0.08;
     spawnTracer(ts, hitPoint, PLAYER_CFG[myId].glowColor);
