@@ -1,0 +1,12 @@
+{
+  "name": "future-shooters",
+  "version": "1.0.0",
+  "description": "2-player online first-person arcade shooter",
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js"
+  },
+  "dependencies": {
+    "ws": "^8.16.0"
+  }
+}
